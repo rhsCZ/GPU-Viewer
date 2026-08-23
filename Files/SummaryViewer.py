@@ -2486,27 +2486,56 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
             flow_box.append(card)
             add_summary_card("vulkan-missing", card)
 
-        # ── OpenGL ───────────────────────────────────────────────────────
+        # ── OpenGL (Unified Core, ES, EGL, GLX) ──────────────────────────
         gl_data = data["opengl"]
         if gl_data["supported"] and gl_data.get("renderer"):
             renderer_label = gl_data["renderer"]
 
-            # Card 1: Core OpenGL
-            gl_columns = [
-                [
-                    ("Renderer", renderer_label),
-                    ("Vendor", gl_data.get("vendor", "—")),
-                ],
-                [
-                    ("OpenGL Version", gl_data.get("version", "—")),
-                    ("GLSL Version", gl_data.get("shading_language_version", "—")),
-                ],
-                [
-                    ("Extension Count", str(gl_data.get("extensions_count", "—"))),
-                ],
+            # Column 1: Core OpenGL
+            col_core = [
+                ("Renderer", renderer_label),
+                ("Vendor", gl_data.get("vendor", "—")),
+                ("OpenGL Version", gl_data.get("version", "—")),
+                ("GLSL Version", gl_data.get("shading_language_version", "—")),
+                ("Extension Count", str(gl_data.get("extensions_count", "—"))),
             ]
+
+            # Column 2: OpenGL ES & EGL
+            col_es_egl = []
+            es_version = gl_data.get("es_version", "")
+            if es_version:
+                col_es_egl.append(("OpenGL ES Version", es_version))
+                if gl_data.get("es_shading_language_version"):
+                    col_es_egl.append(("GLSL ES Version", gl_data.get("es_shading_language_version")))
+                if gl_data.get("es_extensions_count"):
+                    col_es_egl.append(("ES Extension Count", str(gl_data.get("es_extensions_count"))))
+            
+            egl_version = gl_data.get("egl_version", "")
+            egl_count = gl_data.get("egl_count", 0)
+            if egl_version:
+                col_es_egl.append(("EGL Version", egl_version))
+            if egl_count:
+                col_es_egl.append(("EGL Extension Count", str(egl_count)))
+
+            # Column 3: GLX
+            col_glx = []
+            glx_version = gl_data.get("glx_version", "")
+            glx_ext = gl_data.get("glx_extension_count", 0)
+            glx_vis = gl_data.get("glx_visual_count", 0)
+            glx_fb = gl_data.get("fbconfig_count", 0)
+            if glx_version:
+                col_glx.append(("GLX Version", glx_version))
+            if glx_ext:
+                col_glx.append(("GLX Extension Count", str(glx_ext)))
+            if glx_vis:
+                col_glx.append(("GLX Visual Count", str(glx_vis)))
+            if glx_fb:
+                col_glx.append(("GLX FBConfig Count", str(glx_fb)))
+
+            gl_columns = [c for c in [col_core, col_es_egl, col_glx] if c]
+
             card = _make_card(
-                f"OpenGL",
+                "OpenGL",
                 "../Images/OpenGL.png",
                 [],
                 nav_page="page2",
@@ -2521,97 +2550,6 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
             card.set_size_request(250, -1)
             flow_box.append(card)
             add_summary_card("opengl", card)
-
-            # Card 2: OpenGL ES (only if data present)
-            es_version = gl_data.get("es_version", "")
-            if es_version:
-                es_columns = [
-                    [
-                        ("OpenGL ES Version", es_version),
-                        ("GLSL ES Version", gl_data.get("es_shading_language_version", "—")),
-                    ],
-                    [
-                        ("Extension Count", str(gl_data.get("es_extensions_count", "—"))),
-                    ],
-                ]
-                es_card = _make_card(
-                    "OpenGL ES",
-                    "../Images/OpenGL_ES.png",
-                    [],
-                    nav_page="page2",
-                    app=app,
-                    supported=True,
-                    content_widget=_make_grid_card_content(es_columns),
-                    card_id="opengl-es",
-                    allow_reorder=True,
-                    flow_box=flow_box,
-                    columns_data=es_columns,
-                )
-                es_card.set_size_request(250, -1)
-                flow_box.append(es_card)
-                add_summary_card("opengl-es", es_card)
-
-            # Card 3: EGL (only if data present)
-            egl_version = gl_data.get("egl_version", "")
-            egl_count = gl_data.get("egl_count", 0)
-            if egl_version or egl_count:
-                egl_columns = [
-                    [
-                        ("EGL Version", egl_version or "—"),
-                    ],
-                    [
-                        ("Extension Count", str(egl_count) if egl_count else "—"),
-                    ],
-                ]
-                egl_card = _make_card(
-                    "EGL",
-                    "../Images/Egl_logo.png",
-                    [],
-                    nav_page="page2",
-                    app=app,
-                    supported=True,
-                    content_widget=_make_grid_card_content(egl_columns),
-                    card_id="egl",
-                    allow_reorder=True,
-                    flow_box=flow_box,
-                    columns_data=egl_columns,
-                )
-                egl_card.set_size_request(250, -1)
-                flow_box.append(egl_card)
-                add_summary_card("egl", egl_card)
-
-            # Card 4: GLX (only if data present)
-            glx_version = gl_data.get("glx_version", "")
-            glx_ext = gl_data.get("glx_extension_count", 0)
-            glx_vis = gl_data.get("glx_visual_count", 0)
-            glx_fb = gl_data.get("fbconfig_count", 0)
-            if glx_version or glx_ext or glx_vis or glx_fb:
-                glx_columns = [
-                    [
-                        ("GLX Version", glx_version or "—"),
-                        ("Extension Count", str(glx_ext) if glx_ext else "—"),
-                    ],
-                    [
-                        ("Visual Count", str(glx_vis) if glx_vis else "—"),
-                        ("FBConfig Count", str(glx_fb) if glx_fb else "—"),
-                    ],
-                ]
-                glx_card = _make_card(
-                    "GLX",
-                    "../Images/glx.png",
-                    [],
-                    nav_page="page2",
-                    app=app,
-                    supported=True,
-                    content_widget=_make_grid_card_content(glx_columns),
-                    card_id="glx",
-                    allow_reorder=True,
-                    flow_box=flow_box,
-                    columns_data=glx_columns,
-                )
-                glx_card.set_size_request(250, -1)
-                flow_box.append(glx_card)
-                add_summary_card("glx", glx_card)
         else:
             card = _make_card(
                 "OpenGL", "../Images/OpenGL.png",
