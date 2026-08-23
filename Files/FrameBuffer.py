@@ -733,7 +733,8 @@ def FrameBuffer(button):
 
     FBWin.connect("close-request", button_enable)
     screen_width,screen_height = getScreenSize()
-    FBWin.set_size_request(960,640)
+    FBWin.set_default_size(960, 640)
+    FBWin.set_size_request(650, 450)
     FBWin.present()
 
     # Gtk.main()

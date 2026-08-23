@@ -1,3 +1,13 @@
+# Release 1.31 (Summary Tab Enhancements)
+
+## New Features & Improvements
+
+1. **Unified OpenGL Card**: Consolidated Core OpenGL, OpenGL ES, EGL, and GLX information into a single multi-column OpenGL card for a cleaner summary dashboard.
+2. **Interactive Card Pop-out & Docking System**: Every summary card can now be popped out into a standalone window with dynamic layout auto-hiding on the main flow box and a "Dock to Main" button to easily return cards back to the main view.
+3. **Real-time Metric Sync**: CPU, RAM, Uptime, and GPU statistics (VRAM, usage, temperature, clocks, power, fan speed) update independently across both main dashboard cards and floating pop-out windows.
+4. **GTK4 FlowBox Lifecycle Safety**: Fixed GTK4 `FlowBoxChild` parent detachment to prevent widget append assertion failures when docking/undocking cards.
+5. **Adaptive Window Sizing & Typography**: Dynamic sizing based on column density and word wrapping (`Pango.WrapMode.WORD`) to prevent character breaks.
+
 # Release 1.30
 
 ## New Features Added

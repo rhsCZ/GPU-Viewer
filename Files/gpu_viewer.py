@@ -353,16 +353,24 @@ else:
             self.window.set_title("GPU-Viewer v3.2")
             self.window.add_css_class(css_class="view")
 
-            # Set the application's default size to 800x800
+            # Set the application's default and minimum size
+            width, height = getScreenSize()
 
-            width,height = getScreenSize()
+            target_w = int(width * const.WIDTH_RATIO)
+            target_h = int(height * const.HEIGHT_RATIO1)
 
             if int(width) > 2160 and int(height) < 1440:
-                self.window.set_size_request(2160 * const.WIDTH_RATIO ,int(height) * const.HEIGHT_RATIO1)
+                target_w = int(2160 * const.WIDTH_RATIO)
+                target_h = int(height * const.HEIGHT_RATIO1)
             elif int(width) > 2160 and int(height) > 1440:
-                self.window.set_size_request(2160 * const.WIDTH_RATIO ,1440 * const.HEIGHT_RATIO1)
-            else:
-                self.window.set_size_request(int(width) * const.WIDTH_RATIO ,int(height) * const.HEIGHT_RATIO1)
+                target_w = int(2160 * const.WIDTH_RATIO)
+                target_h = int(1440 * const.HEIGHT_RATIO1)
+
+            target_w = max(target_w, 900)
+            target_h = max(target_h, 650)
+
+            self.window.set_default_size(target_w, target_h)
+            self.window.set_size_request(750, 500)
     
             style_manager = Adw.StyleManager.get_default()
             prefer_dark_theme = self.config.get_theme_preference()

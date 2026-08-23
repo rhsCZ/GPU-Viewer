@@ -446,10 +446,22 @@ def getRamInGb(ram):
 # Setting the Minimum Screen Size
 def getScreenSize():
     display = Gdk.Display.get_default()
+    if not display:
+        return 1280, 800
     monitors = display.get_monitors()
-    for m in monitors:
-        g = m.get_geometry()
-    return g.width,g.height
+    if not monitors or monitors.get_n_items() == 0:
+        return 1280, 800
+    max_w, max_h = 0, 0
+    for i in range(monitors.get_n_items()):
+        m = monitors.get_item(i)
+        if m and m.is_valid():
+            g = m.get_geometry()
+            if g.width * g.height > max_w * max_h:
+                max_w, max_h = g.width, g.height
+    if max_w == 0 or max_h == 0:
+        return 1280, 800
+    return max_w, max_h
+
 
 
 # fetching the Images/Logos from the const File
