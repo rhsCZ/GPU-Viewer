@@ -1424,7 +1424,7 @@ def _make_action_row(title: str, subtitle: str) -> Gtk.Widget:
     title_label.add_css_class("body")
     title_label.set_halign(Gtk.Align.START)
     title_label.set_wrap(True)
-    title_label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+    title_label.set_wrap_mode(Pango.WrapMode.WORD)
     title_label.set_selectable(True)
     
     box.append(title_label)
@@ -1455,7 +1455,7 @@ def _make_action_row(title: str, subtitle: str) -> Gtk.Widget:
         value_label.add_css_class("caption")
         value_label.set_halign(Gtk.Align.START)
         value_label.set_wrap(True)
-        value_label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        value_label.set_wrap_mode(Pango.WrapMode.WORD)
         value_label.set_selectable(True)
         
         value_container.append(connector_label)
@@ -1607,21 +1607,81 @@ def _get_icon_name(field_name: str) -> str:
 # Card builders
 # ---------------------------------------------------------------------------
 
-_active_popout_row_widgets = []
+_active_popout_windows = {}
+
+def _refresh_flow_box_display(flow_box: Gtk.FlowBox | None, app=None):
+    """Refresh flow_box children to show all cards except those currently popped out."""
+    if flow_box is None:
+        return
+    registry = list(getattr(flow_box, "_summary_card_registry", []))
+    if not registry:
+        return
+    widget_by_id = {widget_id: widget for widget_id, widget in registry}
+    current_order = [widget_id for widget_id, _ in registry]
+    saved_order = app.config.get_summary_card_order() if app is not None and hasattr(app, "config") else []
+    order_to_use = saved_order if saved_order else current_order
+    ordered_ids = [card_id for card_id in order_to_use if card_id in widget_by_id]
+    for card_id in current_order:
+        if card_id not in ordered_ids:
+            ordered_ids.append(card_id)
+    
+    # Detach card widgets from existing parent FlowBoxChild containers to prevent GTK4 critical assertion errors
+    for _, widget in registry:
+        if widget is not None:
+            parent = widget.get_parent()
+            if parent is not None:
+                if hasattr(parent, "set_child"):
+                    parent.set_child(None)
+                else:
+                    widget.unparent()
+
+    flow_box.remove_all()
+    for card_id in ordered_ids:
+        if card_id not in _active_popout_windows:
+            widget = widget_by_id[card_id]
+            parent = widget.get_parent()
+            if parent is not None:
+                if hasattr(parent, "set_child"):
+                    parent.set_child(None)
+                else:
+                    widget.unparent()
+            flow_box.append(widget)
+
 
 def _open_card_in_separate_window(title: str, icon_name: str, rows: list = None,
                                    content_widget: Gtk.Widget | None = None,
                                    columns_data: list[list[tuple[str, str]]] | None = None,
                                    supported: bool = True,
                                    app = None,
-                                   parent_row_widgets: dict = None):
+                                   parent_row_widgets: dict = None,
+                                   card_id: str | None = None,
+                                   card_widget: Gtk.Widget | None = None,
+                                   flow_box: Gtk.FlowBox | None = None,
+                                   gpu_index: int | None = None):
     """Open a card in a separate standalone window."""
+    if card_id and card_id in _active_popout_windows:
+        _active_popout_windows[card_id]["window"].present()
+        return
+
     win = Adw.Window()
     win.set_title(f"{title} - GPU-Viewer")
     
     headerbar = Adw.HeaderBar.new()
     headerbar.add_css_class(css_class='compact')
     
+    # Dock to Main button in top bar
+    dock_btn = Gtk.Button()
+    dock_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+    dock_img = Gtk.Image.new_from_icon_name("window-restore-symbolic")
+    dock_label = Gtk.Label(label="Dock to Main")
+    dock_box.append(dock_img)
+    dock_box.append(dock_label)
+    dock_btn.set_child(dock_box)
+    dock_btn.add_css_class("flat")
+    dock_btn.add_css_class("suggested-action")
+    dock_btn.set_tooltip_text(f"Return {title} card to main window")
+    headerbar.pack_start(dock_btn)
+
     title_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
     try:
         icon_pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(icon_name, 18, 18, True)
@@ -1671,18 +1731,54 @@ def _open_card_in_separate_window(title: str, icon_name: str, rows: list = None,
     elif content_widget is not None:
         card_container.append(content_widget)
 
-    if popout_widgets:
-        _active_popout_row_widgets.append(popout_widgets)
-        def on_popout_closed(window):
-            if popout_widgets in _active_popout_row_widgets:
-                _active_popout_row_widgets.remove(popout_widgets)
-        win.connect("close-request", on_popout_closed)
+    key = card_id if card_id else f"popout-{id(win)}"
+    popout_info = {
+        "window": win,
+        "card_widget": card_widget,
+        "flow_box": flow_box,
+        "widgets": popout_widgets,
+        "gpu_index": gpu_index,
+        "app": app,
+        "docked": False,
+    }
+    _active_popout_windows[key] = popout_info
 
-    # Intentionally omit win.set_transient_for(app.window) so the pop-out window
-    # functions as an independent top-level window that will not be closed or minimized
-    # when the main window is closed or minimized.
+    def dock_back(focus_main=True):
+        if not popout_info["docked"]:
+            popout_info["docked"] = True
+            _active_popout_windows.pop(key, None)
+            if flow_box is not None:
+                _refresh_flow_box_display(flow_box, app)
+            if focus_main and app and hasattr(app, "window") and app.window:
+                app.window.present()
+            win.close()
 
-    win.set_default_size(680, 500)
+    dock_btn.connect("clicked", lambda _: dock_back(focus_main=True))
+
+    def on_popout_closed(window):
+        if not popout_info["docked"]:
+            dock_back(focus_main=True)
+        return False
+
+    win.connect("close-request", on_popout_closed)
+
+    # Hide card from main window flow_box layout
+    if flow_box is not None:
+        _refresh_flow_box_display(flow_box, app)
+
+    # Dynamic sizing based on number of columns to prevent awkward text wrapping
+    num_cols = len(columns_data) if columns_data else (1 if rows else 2)
+    if num_cols <= 1:
+        default_w, default_h = 600, 480
+    elif num_cols == 2:
+        default_w, default_h = 820, 520
+    elif num_cols == 3:
+        default_w, default_h = 1040, 580
+    else:
+        default_w, default_h = 1240, 640
+
+    win.set_default_size(default_w, default_h)
+    win.set_size_request(550, 400)
     win.present()
 
 
@@ -1774,6 +1870,10 @@ def _make_card(title: str, icon_name: str, rows: list,
             supported=supported,
             app=app,
             parent_row_widgets=row_widgets_out,
+            card_id=card_id,
+            card_widget=frame,
+            flow_box=flow_box,
+            gpu_index=gpu_index,
         )
 
     popout_btn.connect("clicked", on_popout_clicked)
@@ -2033,17 +2133,12 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
             if not registry:
                 return
             widget_by_id = {widget_id: widget for widget_id, widget in registry}
-            ordered_widgets = [widget_by_id[widget_id] for widget_id in order if widget_id in widget_by_id]
-            for widget_id in list(widget_by_id):
-                if widget_id not in order:
-                    ordered_widgets.append(widget_by_id[widget_id])
-            flow_box.remove_all()
-            for widget in ordered_widgets:
-                flow_box.append(widget)
-            flow_box._summary_card_registry = [(widget_id, widget_by_id[widget_id]) for widget_id in order if widget_id in widget_by_id]
-            for widget_id in list(widget_by_id):
-                if widget_id not in order:
-                    flow_box._summary_card_registry.append((widget_id, widget_by_id[widget_id]))
+            ordered_ids = [card_id for card_id in order if card_id in widget_by_id]
+            for card_id in list(widget_by_id):
+                if card_id not in ordered_ids:
+                    ordered_ids.append(card_id)
+            flow_box._summary_card_registry = [(card_id, widget_by_id[card_id]) for card_id in ordered_ids]
+            _refresh_flow_box_display(flow_box, app)
 
         def _move_card_in_summary_order(card_id: str, direction: int):
             if flow_box is None:
@@ -2638,7 +2733,7 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
 
         # Periodic statistics update
         def update_stats_callback():
-            if not outer.get_mapped() and not _active_popout_row_widgets:
+            if not outer.get_mapped() and not _active_popout_windows:
                 return True
                 
             def fetch_stats():
@@ -2656,7 +2751,8 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                         if "Uptime" in sys_widgets and u != "—":
                             sys_widgets["Uptime"].set_subtitle(u)
 
-                        for pw in _active_popout_row_widgets:
+                        if "system" in _active_popout_windows:
+                            pw = _active_popout_windows["system"].get("widgets", {})
                             if "CPU Usage" in pw and c != "—":
                                 pw["CPU Usage"].set_subtitle(c)
                             if "RAM Usage" in pw and r != "—":
@@ -2670,7 +2766,7 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                     for gpu_index, widgets in stats_widgets_list:
                         stats = get_gpu_stats_for_index(gpu_index)
                         if stats:
-                            def apply_updates(w=widgets, s=stats):
+                            def apply_updates(w=widgets, s=stats, g_idx=gpu_index):
                                 mem_used = s.get("mem_used")
                                 mem_total = s.get("mem_total")
                                 vram_str = f"{mem_used} / {mem_total} MB ({(mem_used / mem_total) * 100.0:.0f} %)" if (mem_used is not None and mem_total is not None and mem_total > 0) else None
@@ -2703,7 +2799,9 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                                 if "Fan Speed" in w and s.get("fan_speed") is not None:
                                     w["Fan Speed"].set_subtitle(f"{s['fan_speed']} %" if s["fan_speed"] >= 0 else "—")
 
-                                for pw in _active_popout_row_widgets:
+                                gpu_card_id = f"gpu-{g_idx}"
+                                if gpu_card_id in _active_popout_windows:
+                                    pw = _active_popout_windows[gpu_card_id].get("widgets", {})
                                     if "VRAM" in pw and vram_str:
                                         pw["VRAM"].set_subtitle(vram_str)
                                     if "VRAM Clock" in pw and vram_clock_str:
@@ -2729,7 +2827,7 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
         timeout_id = GLib.timeout_add(1000, update_stats_callback)
         
         def on_destroy(widget):
-            if not _active_popout_row_widgets:
+            if not _active_popout_windows:
                 GLib.source_remove(timeout_id)
         outer.connect("destroy", on_destroy)
 
