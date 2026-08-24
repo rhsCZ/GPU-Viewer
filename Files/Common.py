@@ -31,7 +31,166 @@ import glob
 import configparser
 import math
 
-# Removed CircularGauge - reverting to LevelBar
+# Custom Cairo Circular Gauge / Speedometer for GPU Stats
+class CircularGauge(Gtk.DrawingArea):
+    """
+    Custom GTK4 Cairo-rendered speedometer / circular gauge widget for GPU statistics.
+    """
+    def __init__(self, size=110, title="", unit="%", min_value=0.0, max_value=100.0, gauge_type="usage"):
+        super().__init__()
+        self.size = size
+        self.title = title
+        self.unit = unit
+        self.min_value = float(min_value)
+        self.max_value = float(max_value)
+        self.value = float(min_value)
+        self.subtitle = ""
+        self.gauge_type = gauge_type
+        self.value_label = None
+
+        self.set_content_width(size)
+        self.set_content_height(size)
+        self.set_draw_func(self._on_draw)
+
+    def set_value(self, value, subtitle=None, max_value=None):
+        if max_value is not None and max_value > 0:
+            self.max_value = float(max_value)
+        if value is None:
+            self.value = None
+        else:
+            try:
+                self.value = float(value)
+            except (ValueError, TypeError):
+                self.value = None
+        if subtitle is not None:
+            self.subtitle = str(subtitle)
+        self.queue_draw()
+
+    def set_max_value(self, max_value):
+        if max_value > 0:
+            self.max_value = float(max_value)
+            self.queue_draw()
+
+    def _get_colors(self, percentage):
+        """Return RGB tuple for current gauge state/type."""
+        if self.gauge_type == "temp":
+            if self.value is None or self.value <= 0:
+                return (0.2, 0.7, 0.9)
+            if self.value < 50:
+                return (0.2, 0.7, 0.9)  # Cool cyan
+            elif self.value < 75:
+                return (0.95, 0.7, 0.1)  # Warm yellow
+            else:
+                return (0.9, 0.25, 0.2)  # High heat red
+        elif self.gauge_type in ("clock", "vram_clock"):
+            return (0.6, 0.3, 0.85)  # Purple / violet
+        elif self.gauge_type == "power":
+            return (0.95, 0.5, 0.1)  # Amber / Orange
+        elif self.gauge_type == "fan":
+            return (0.1, 0.75, 0.7)  # Teal / Mint
+        elif self.gauge_type == "vram":
+            return (0.2, 0.65, 0.95)  # Sky blue
+        else:
+            return (0.2, 0.5, 0.9)  # Electric blue
+
+    def _on_draw(self, area, cr, width, height):
+        cx = width / 2.0
+        cy = height * 0.50
+        radius = min(width, height) * 0.36
+        line_width = max(5.0, radius * 0.16)
+
+        # 240-degree arc: from 135 deg to 405 deg (3/4 pi to 9/4 pi)
+        start_angle = math.pi * 0.75
+        total_angle = math.pi * 1.5
+        end_angle = start_angle + total_angle
+
+        # 1. Background Arc Track
+        cr.save()
+        cr.set_line_width(line_width)
+        cr.set_line_cap(_cairo.LINE_CAP_ROUND)
+        cr.set_source_rgba(0.5, 0.5, 0.5, 0.2)
+        cr.arc(cx, cy, radius, start_angle, end_angle)
+        cr.stroke()
+        cr.restore()
+
+        # 2. Tick Marks
+        cr.save()
+        num_ticks = 9
+        tick_r_inner = radius - line_width * 0.8
+        tick_r_outer = radius - line_width * 0.5
+        cr.set_line_width(1.2)
+        cr.set_source_rgba(0.6, 0.6, 0.6, 0.35)
+        for i in range(num_ticks):
+            t_angle = start_angle + (total_angle / (num_ticks - 1)) * i
+            x1 = cx + math.cos(t_angle) * tick_r_inner
+            y1 = cy + math.sin(t_angle) * tick_r_inner
+            x2 = cx + math.cos(t_angle) * tick_r_outer
+            y2 = cy + math.sin(t_angle) * tick_r_outer
+            cr.move_to(x1, y1)
+            cr.line_to(x2, y2)
+            cr.stroke()
+        cr.restore()
+
+        # 3. Active Value Arc
+        if self.value is not None and self.max_value > self.min_value:
+            val_clamped = max(self.min_value, min(self.max_value, self.value))
+            pct = (val_clamped - self.min_value) / (self.max_value - self.min_value)
+            if pct > 0:
+                active_end_angle = start_angle + total_angle * pct
+                r, g, b = self._get_colors(pct)
+
+                cr.save()
+                cr.set_line_width(line_width)
+                cr.set_line_cap(_cairo.LINE_CAP_ROUND)
+                cr.set_source_rgb(r, g, b)
+                cr.arc(cx, cy, radius, start_angle, active_end_angle)
+                cr.stroke()
+                cr.restore()
+
+        # 4. Text Display (Value & Title)
+        cr.save()
+        if self.value is not None:
+            if self.unit == "%":
+                val_text = f"{int(self.value)}%"
+            elif self.unit in ("°C", "C"):
+                val_text = f"{int(self.value)}°C"
+            elif self.unit in ("W", "MHz", "MB", "GB"):
+                val_text = f"{int(self.value)} {self.unit}"
+            else:
+                val_text = f"{int(self.value)}{self.unit}"
+        else:
+            val_text = "N/A"
+
+        cr.set_source_rgb(0.9, 0.9, 0.95)
+        font_size = max(10, int(radius * 0.40))
+        cr.select_font_face("Sans", _cairo.FONT_SLANT_NORMAL, _cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(font_size)
+
+        extents = cr.text_extents(val_text)
+        cr.move_to(cx - extents.width / 2.0 - extents.x_bearing, cy - extents.height / 2.0 - extents.y_bearing - radius * 0.05)
+        cr.show_text(val_text)
+
+        # Title text (below main value)
+        if self.title:
+            title_font_size = max(8, int(radius * 0.26))
+            cr.set_font_size(title_font_size)
+            cr.set_source_rgba(0.75, 0.75, 0.8, 0.9)
+            cr.select_font_face("Sans", _cairo.FONT_SLANT_NORMAL, _cairo.FONT_WEIGHT_NORMAL)
+            t_extents = cr.text_extents(self.title)
+            cr.move_to(cx - t_extents.width / 2.0 - t_extents.x_bearing, cy + radius * 0.38)
+            cr.show_text(self.title)
+
+        # Subtitle (e.g. 1245 / 8192 MB)
+        if self.subtitle:
+            sub_font_size = max(7, int(radius * 0.20))
+            cr.set_font_size(sub_font_size)
+            cr.set_source_rgba(0.6, 0.6, 0.65, 0.8)
+            s_extents = cr.text_extents(self.subtitle)
+            cr.move_to(cx - s_extents.width / 2.0 - s_extents.x_bearing, cy + radius * 0.65)
+            cr.show_text(self.subtitle)
+
+        cr.restore()
+
 
 _intel_rc6_cache = {}
 

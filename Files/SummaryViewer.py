@@ -38,7 +38,7 @@ from gi.repository import Gtk, Adw, GLib, GdkPixbuf, Pango, Gdk
 
 import const
 import Filenames
-from Common import getLogo, getGpuImage, get_gpu_stats, get_gpu_stats_for_index, fetchContentsFromCommand
+from Common import getLogo, getGpuImage, get_gpu_stats, get_gpu_stats_for_index, fetchContentsFromCommand, CircularGauge
 # Try to reuse the robust clinfo parser when available
 try:
     from OpenCL import ClinfoParser
@@ -1782,6 +1782,96 @@ def _open_card_in_separate_window(title: str, icon_name: str, rows: list = None,
     win.present()
 
 
+
+def _make_gauge_dashboard(gpu_stats: dict, gauges_out: dict) -> Gtk.Widget:
+    """
+    Build the speedometer / circular-gauge dashboard for a single GPU card.
+
+    Seven gauges are rendered:
+      VRAM (%), VRAM Clock (%), GPU Usage (%), Temperature (°C),
+      GPU Clock (%), Power (W), Fan Speed (%)
+
+    Live references are stored in *gauges_out* so the periodic update
+    callback can call gauge.set_value() on each one.
+
+    Returns a Gtk.Box ready to be appended into a card_box.
+    """
+    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    outer.set_margin_start(8)
+    outer.set_margin_end(8)
+    outer.set_margin_top(4)
+    outer.set_margin_bottom(8)
+
+    # ---- Grid: up to 4 gauges per row ----
+    grid = Gtk.Grid()
+    grid.set_row_spacing(4)
+    grid.set_column_spacing(4)
+    grid.set_row_homogeneous(True)
+    grid.set_column_homogeneous(True)
+
+    GAUGE_SIZE = 118
+
+    def _gauge_cell(title, unit, gauge_type, value, subtitle="", max_value=100.0):
+        """Build a single gauge + label cell."""
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        vbox.set_halign(Gtk.Align.CENTER)
+        vbox.set_valign(Gtk.Align.CENTER)
+
+        g = CircularGauge(size=GAUGE_SIZE, title=title, unit=unit,
+                          min_value=0.0, max_value=max_value,
+                          gauge_type=gauge_type)
+        g.set_value(value, subtitle=subtitle)
+        g.set_hexpand(True)
+        g.set_vexpand(False)
+
+        vbox.append(g)
+        return vbox, g
+
+    # ---- Derive initial values from gpu_stats ----
+    mem_used  = gpu_stats.get("mem_used") or 0
+    mem_total = gpu_stats.get("mem_total") or 0
+    vram_pct  = (mem_used / mem_total * 100.0) if mem_total > 0 else 0
+    vram_sub  = f"{mem_used}/{mem_total} MB" if mem_total > 0 else ""
+
+    vc_cur  = gpu_stats.get("vram_clock") or 0
+    vc_max  = gpu_stats.get("vram_clock_max") or 0
+    vc_pct  = (vc_cur / vc_max * 100.0) if vc_max > 0 else 0
+    vc_sub  = f"{vc_cur}/{vc_max} MHz" if vc_max > 0 else (f"{vc_cur} MHz" if vc_cur > 0 else "")
+
+    usage = gpu_stats.get("usage")
+    usage_val = usage if (usage is not None and usage >= 0) else 0
+
+    temp = gpu_stats.get("temp") or 0
+
+    clk_cur = gpu_stats.get("clock_current") or 0
+    clk_max = gpu_stats.get("clock_max") or 0
+    clk_pct = (clk_cur / clk_max * 100.0) if clk_max > 0 else 0
+    clk_sub = f"{clk_cur}/{clk_max} MHz" if clk_max > 0 else (f"{clk_cur} MHz" if clk_cur > 0 else "")
+
+    power = gpu_stats.get("power_usage") or 0
+    fan   = gpu_stats.get("fan_speed")
+    fan_val = fan if (fan is not None and fan >= 0) else 0
+
+    # ---- Gauge definitions: (col, row, title, unit, type, init_val, subtitle, max_val) ----
+    gauge_defs = [
+        (0, 0, "VRAM",       "%",   "vram",      vram_pct, vram_sub,  100.0),
+        (1, 0, "VRAM Clock", "%",   "vram_clock", vc_pct,  vc_sub,    100.0),
+        (2, 0, "GPU Usage",  "%",   "usage",     usage_val, "",        100.0),
+        (3, 0, "Temp",       "°C",  "temp",      float(temp), "",      110.0),
+        (0, 1, "GPU Clock",  "%",   "clock",     clk_pct,  clk_sub,   100.0),
+        (1, 1, "Power",      "W",   "power",     float(power), "",     300.0),
+        (2, 1, "Fan Speed",  "%",   "fan",       float(fan_val), "",   100.0),
+    ]
+
+    for col, row, key, unit, gtype, init_val, sub, max_v in gauge_defs:
+        cell, gauge = _gauge_cell(key, unit, gtype, init_val, sub, max_v)
+        grid.attach(cell, col, row, 1, 1)
+        gauges_out[key] = gauge
+
+    outer.append(grid)
+    return outer
+
+
 def _make_card(title: str, icon_name: str, rows: list,
                nav_page: str | None, app,
                supported: bool = True,
@@ -2362,6 +2452,31 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                 # Only include non-empty columns
                 gpu_columns = [c for c in [gpu_rows_col1, gpu_rows_col2, gpu_rows_col3] if c]
 
+                # Build combined content: text info grid + speedometer dashboard
+                combined_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+
+                if gpu_columns:
+                    text_content = _make_grid_card_content(gpu_columns, row_widgets_out=gpu_widgets)
+                    combined_box.append(text_content)
+
+                # Gauge section header
+                gauge_sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+                gauge_sep.set_margin_top(4)
+                gauge_sep.set_margin_bottom(4)
+                combined_box.append(gauge_sep)
+
+                gauge_header_lbl = Gtk.Label(label="Real-Time Performance")
+                gauge_header_lbl.add_css_class("caption-heading")
+                gauge_header_lbl.set_halign(Gtk.Align.START)
+                gauge_header_lbl.set_margin_start(12)
+                gauge_header_lbl.set_margin_top(4)
+                gauge_header_lbl.set_margin_bottom(2)
+                combined_box.append(gauge_header_lbl)
+
+                # Speedometer gauges
+                gauge_widgets = {}
+                gauge_dashboard = _make_gauge_dashboard(gpu_stats, gauge_widgets)
+                combined_box.append(gauge_dashboard)
 
                 gpu_logo = _get_gpu_logo(gpu_info.get("vendor_id", ""))
                 gpu_card = _make_card(
@@ -2371,17 +2486,18 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                     nav_page=None,
                     app=app,
                     supported=True,
-                    content_widget=_make_grid_card_content(gpu_columns, row_widgets_out=gpu_widgets),
+                    content_widget=combined_box,
                     row_widgets_out=gpu_widgets,
                     card_id=f"gpu-{gpu_idx}",
                     allow_reorder=True,
                     flow_box=flow_box,
                     columns_data=gpu_columns,
                 )
-                gpu_card.set_size_request(250, -1)
+                gpu_card.set_size_request(480, -1)
                 flow_box.append(gpu_card)
                 add_summary_card(f"gpu-{gpu_idx}", gpu_card)
-                stats_widgets_list.append((gpu_idx, gpu_widgets))
+                stats_widgets_list.append((gpu_idx, gpu_widgets, gauge_widgets))
+
         else:
             stats_card = _make_card(
                 "GPU Statistics",
@@ -2701,10 +2817,10 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
 
                     GLib.idle_add(apply_sys_updates)
 
-                    for gpu_index, widgets in stats_widgets_list:
+                    for gpu_index, widgets, gauge_widgets in stats_widgets_list:
                         stats = get_gpu_stats_for_index(gpu_index)
                         if stats:
-                            def apply_updates(w=widgets, s=stats, g_idx=gpu_index):
+                            def apply_updates(w=widgets, gw=gauge_widgets, s=stats, g_idx=gpu_index):
                                 mem_used = s.get("mem_used")
                                 mem_total = s.get("mem_total")
                                 vram_str = f"{mem_used} / {mem_total} MB ({(mem_used / mem_total) * 100.0:.0f} %)" if (mem_used is not None and mem_total is not None and mem_total > 0) else None
@@ -2722,6 +2838,7 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                                 clk_max = s.get("clock_max")
                                 gpu_clock_str = f"{clk_cur} / {clk_max} MHz" if (clk_cur and clk_cur > 0 and clk_max and clk_max > 0) else (f"{clk_cur} MHz" if clk_cur and clk_cur > 0 else None)
 
+                                # ---- Update text action rows ----
                                 if "VRAM" in w and vram_str:
                                     w["VRAM"].set_subtitle(vram_str)
                                 if "VRAM Clock" in w and vram_clock_str:
@@ -2737,6 +2854,40 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                                 if "Fan Speed" in w and s.get("fan_speed") is not None:
                                     w["Fan Speed"].set_subtitle(f"{s['fan_speed']} %" if s["fan_speed"] >= 0 else "—")
 
+                                # ---- Update circular gauge speedometers ----
+                                if mem_total and mem_total > 0 and "VRAM" in gw:
+                                    vram_pct = (mem_used / mem_total * 100.0) if mem_used else 0
+                                    gw["VRAM"].set_value(vram_pct, subtitle=f"{mem_used}/{mem_total}MB")
+                                
+                                if "VRAM Clock" in gw:
+                                    if vram_clock and vram_clock > 0:
+                                        vc_pct = (vram_clock / vram_clock_max * 100.0) if (vram_clock_max and vram_clock_max > 0) else 0
+                                        vc_sub = f"{vram_clock}/{vram_clock_max}MHz" if (vram_clock_max and vram_clock_max > 0) else f"{vram_clock}MHz"
+                                        gw["VRAM Clock"].set_value(vc_pct, subtitle=vc_sub, max_value=100.0)
+                                    else:
+                                        gw["VRAM Clock"].set_value(0, subtitle="N/A")
+
+                                if "GPU Usage" in gw and s.get("usage") is not None and s["usage"] >= 0:
+                                    gw["GPU Usage"].set_value(s["usage"])
+
+                                if "Temp" in gw and s.get("temp") is not None and s["temp"] > 0:
+                                    gw["Temp"].set_value(s["temp"])
+
+                                if "GPU Clock" in gw:
+                                    if clk_cur and clk_cur > 0:
+                                        clk_pct = (clk_cur / clk_max * 100.0) if (clk_max and clk_max > 0) else 0
+                                        clk_sub = f"{clk_cur}/{clk_max}MHz" if (clk_max and clk_max > 0) else f"{clk_cur}MHz"
+                                        gw["GPU Clock"].set_value(clk_pct, subtitle=clk_sub, max_value=100.0)
+                                    else:
+                                        gw["GPU Clock"].set_value(0, subtitle="N/A")
+
+                                if "Power" in gw and s.get("power_usage") is not None and s["power_usage"] > 0:
+                                    gw["Power"].set_value(s["power_usage"])
+
+                                if "Fan Speed" in gw and s.get("fan_speed") is not None and s["fan_speed"] >= 0:
+                                    gw["Fan Speed"].set_value(s["fan_speed"])
+
+                                # ---- Popout window text rows ----
                                 gpu_card_id = f"gpu-{g_idx}"
                                 if gpu_card_id in _active_popout_windows:
                                     pw = _active_popout_windows[gpu_card_id].get("widgets", {})
@@ -2757,6 +2908,7 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                                 return False
                             GLib.idle_add(apply_updates)
                 except Exception as e:
+
                     print(f"Error updating real-time stats: {e}")
                     
             threading.Thread(target=fetch_stats, daemon=True).start()
