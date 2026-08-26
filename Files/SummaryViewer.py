@@ -1875,7 +1875,7 @@ def _make_gauge_dashboard(gpu_stats: dict, gauges_out: dict,
     grid.set_row_homogeneous(True)
     grid.set_column_homogeneous(True)
 
-    GAUGE_SIZE = 120
+    GAUGE_SIZE = 138
 
     def _gauge_cell(title, unit, gauge_type, value, subtitle="", max_value=100.0):
         """Build a single gauge + label cell."""

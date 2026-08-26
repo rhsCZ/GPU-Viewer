@@ -404,25 +404,24 @@ def create_vulkan_tab_content(self):
                 j = 0; iter = None
                 toprow = None
                 for i,line in enumerate(file1):
+                    if i >= len(vulkan_device_limits_lhs):
+                        break
                     text = vulkan_device_limits_lhs[i].strip('\t')
                     if not (iter == text):
                         if '=' in line and "\t\t" not in line:
                             text = vulkan_device_limits_lhs[i].strip('\t')
+                            rhs_val = vulkan_device_limits_rhs[j].strip('\n') if j < len(vulkan_device_limits_rhs) else ""
                             if iter == None:
-                                toprow = ExpandDataObject((text.strip('\n')).replace(' count',''), vulkan_device_limits_rhs[j].strip('\n'))
+                                toprow = ExpandDataObject((text.strip('\n')).replace(' count',''), rhs_val)
                                 j = j + 1
                             else:
                                 if toprow:
                                     LimitsTab_Store.append(toprow)
-                                toprow = ExpandDataObject((text.strip('\n')).replace(' count',''), vulkan_device_limits_rhs[j].strip('\n'))
+                                toprow = ExpandDataObject((text.strip('\n')).replace(' count',''), rhs_val)
                                 j = j + 1
                             iter = text
                             continue
-                    #    iter = [ExpandDataObject((text.strip('\n')).replace(' count',''), vulkan_device_limits_rhs[j].strip('\n'),iter2)]
-                    #    toprow = ExpandDataObject((text.strip('\n')).replace(' count',''), vulkan_device_limits_rhs[j].strip('\n'))
-                    #    j = j + 1
                     if "\t\t" in line and "=" not in line:
-                     #   iter2 = [ExpandDataObject(text.strip('\n')," ",iter)]
                         childrow = ExpandDataObject((text.strip('\n')).replace(' count',''), " ")
                         if toprow:
                             toprow.children.append(childrow)
@@ -435,48 +434,18 @@ def create_vulkan_tab_content(self):
 
         GLib.idle_add(update_ui)
     def Features(GPUname):
-        fetch_device_features_command = "cat %s | awk '/GPU%d/{flag=1;next}/Format Properties.*/{flag=0}flag' | awk '/VkPhysicalDeviceFeatures:/{flag=1;next}/Format Properties.*/{flag=0}flag' " %(Filenames.vulkaninfo_output_file,GPUname)
 
-        createMainFile(Filenames.vulkan_device_features_file,fetch_device_features_command)
-        def update_ui():
-            featureList.remove_all()
-            featureList.append(DataObject("Show All Device Features",""))
-            with open(Filenames.vulkan_device_features_file, "r") as file:
-                for line in file:
-                    if "Vk" in line:
-                        text = line[:-2]
-                        featureList.append(DataObject(((text.strip("\n")).replace("VkPhysicalDevice","").replace(":","")),""))
+        fetch_vulkan_device_features_command = "awk '/GPU%d/{flag=1;next}/VkPhysicalDeviceLimits:/{flag=0}flag' | awk '/VkPhysicalDeviceFeatures:/{flag=1;next}/VkPhysicalDeviceLimits:/{flag=0}flag' | awk '/--/{flag=1;next}flag' | awk '/./'" %(GPUname)
 
-            # Hide spinner and show content
-            hide_spinner_for_tab("Features")
+        createMainFile(Filenames.vulkan_device_features_file,Filenames.fetch_vulkaninfo_ouput_command+fetch_vulkan_device_features_command)
 
-        GLib.idle_add(update_ui)
-    def selectFeature(dropdown, _pspec):
-        selected =dropdown.props.selected_item
-        feature = ""
-        if selected is not None:
-            feature = selected.column1
+        createMainFile(Filenames.vulkan_device_features_lhs_file,Filenames.fetch_vulkan_device_features_lhs_command)
 
-        fetch_device_features_all_command = "cat %s | awk '/==/{flag=1;next} flag' | awk '{sub(/^[ \t]+/, 'True'); print }' | grep =" %(Filenames.vulkan_device_features_file)
-        fetch_device_features_selected_command = "cat %s | awk '/%s/{flag=1;next}/^Vk*/{flag=0}flag' | awk '/--/{flag=1 ; next} flag' | grep = | sort " %(Filenames.vulkan_device_features_file,feature)
-        fetch_device_features_selected_lhs_command = "cat %s | awk '{sub(/^[ \t]+/, 'True'); print }' | awk '{gsub(/= true/,'True');print}' | awk '{gsub(/= false/,'False');print}' | awk '{sub(/[ \t]+$/, 'True'); print }' | awk '/./' | sort | uniq" %(Filenames.vulkan_device_features_select_file)
+        createMainFile(Filenames.vulkan_device_features_select_file,Filenames.fetch_vulkan_device_features_select_command)
 
-        if feature is None:
-            feature =' '
-        elif "Show All Device Features" in feature:
-            createMainFile(Filenames.vulkan_device_features_select_file,fetch_device_features_all_command)
-            featureColumn1.set_title("Device Features")
-        else:
-            createMainFile(Filenames.vulkan_device_features_select_file,fetch_device_features_selected_command)
-            featureColumn1.set_title(feature)
-        createMainFile(Filenames.vulkan_device_features_lhs_file,fetch_device_features_selected_lhs_command)
+        FeaturesLHS = fetchContentsFromCommand("cat %s "%Filenames.vulkan_device_features_lhs_file)
 
-        value = []
-        fgColor = []
-        FeatureTab_Store.remove_all()
-    #    TreeFeatures.set_model(FeaturesTab_Store_filter)
-        FeaturesLHS = copyContentsFromFile(Filenames.vulkan_device_features_lhs_file,)
-        count = 0
+        value = []; count = 0; fgColor = []
         for i,LHS in enumerate(FeaturesLHS):
             with open(Filenames.vulkan_device_features_select_file, "r") as file1:
                 text = LHS.strip('\n')
@@ -490,8 +459,9 @@ def create_vulkan_tab_content(self):
                         else :
                             value.append('false')
                             fgColor.append(const.COLOR2)
-                            break                        
-                FeatureTab_Store.append(DataObject("  " +text.strip('\n'), value[i].strip('\n'), ))
+                            break
+                val_str = value[i].strip('\n') if i < len(value) else ""
+                FeatureTab_Store.append(DataObject("  " +text.strip('\n'), val_str))
 
 
     def Extensions(GPUname):
@@ -511,7 +481,8 @@ def create_vulkan_tab_content(self):
                 extensionColumnView.set_model(extensionSelection)
 
                 for i in range(len(vulkan_device_extension_lhs)):
-                    ExtensionTab_Store.append(DataObject(vulkan_device_extension_lhs[i].strip('\t'),vulkan_device_extensions_rhs[i]))
+                    rhs_val = vulkan_device_extensions_rhs[i] if i < len(vulkan_device_extensions_rhs) else ""
+                    ExtensionTab_Store.append(DataObject(vulkan_device_extension_lhs[i].strip('\t'), rhs_val))
 
                 label = "Device Extensions (%d)" %len(vulkan_device_extensions_rhs)
                 deviceExtensionColumn.set_title(label)
@@ -1903,7 +1874,50 @@ def create_vulkan_tab_content(self):
             features_dropdown_search = _get_search_entry_widget(featureDropdown)
             features_dropdown_search.connect('search-changed',_on_search_method_changed,filter_features_dropdown)
         #   featureDropdown.set_model(featureList)
-            featureDropdown.connect('notify::selected-item',selectFeature)
+            def selectFeature(dropdown, _pspec):
+                selected = dropdown.props.selected_item
+                feature = ""
+                if selected is not None:
+                    feature = selected.column1
+
+                fetch_device_features_all_command = "cat %s | awk '/==/{flag=1;next} flag' | awk '{sub(/^[ \\t]+/, \"True\"); print }' | grep =" %(Filenames.vulkan_device_features_file)
+                fetch_device_features_selected_command = "cat %s | awk '/%s/{flag=1;next}/^Vk*/{flag=0}flag' | awk '/--/{flag=1 ; next} flag' | grep = | sort " %(Filenames.vulkan_device_features_file,feature)
+                fetch_device_features_selected_lhs_command = "cat %s | awk '{sub(/^[ \\t]+/, \"True\"); print }' | awk '{gsub(/= true/,\"True\");print}' | awk '{gsub(/= false/,\"False\");print}' | awk '{sub(/[ \\t]+$/, \"True\"); print }' | awk '/./' | sort | uniq" %(Filenames.vulkan_device_features_select_file)
+
+                if feature is None:
+                    feature = ' '
+                elif "Show All Device Features" in feature:
+                    createMainFile(Filenames.vulkan_device_features_select_file, fetch_device_features_all_command)
+                    featureColumn1.set_title("Device Features")
+                else:
+                    createMainFile(Filenames.vulkan_device_features_select_file, fetch_device_features_selected_command)
+                    featureColumn1.set_title(feature)
+                createMainFile(Filenames.vulkan_device_features_lhs_file, fetch_device_features_selected_lhs_command)
+
+                value = []
+                fgColor = []
+                FeatureTab_Store.remove_all()
+                FeaturesLHS = copyContentsFromFile(Filenames.vulkan_device_features_lhs_file)
+                count = 0
+                for i, LHS in enumerate(FeaturesLHS):
+                    with open(Filenames.vulkan_device_features_select_file, "r") as file1:
+                        text = LHS.strip('\n')
+                        for line in file1:
+                            if text in line:
+                                if "= true" in line:
+                                    value.append('true')
+                                    count = count + 1
+                                    fgColor.append(const.COLOR1)
+                                    break
+                                else:
+                                    value.append('false')
+                                    fgColor.append(const.COLOR2)
+                                    break
+                        val_str = value[i].strip('\n') if i < len(value) else ""
+                        FeatureTab_Store.append(DataObject("  " + text.strip('\n'), val_str))
+
+            featureDropdown.connect('notify::selected-item', selectFeature)
+
             
             featureFrameSearch = Gtk.Frame()
             featureSearchEntry = Gtk.SearchEntry()
