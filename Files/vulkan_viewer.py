@@ -31,6 +31,7 @@ from gi.repository import Gtk, Gio, GObject, Adw, GdkPixbuf, Pango, GLib
 from Common import fetchContentsFromCommand, create_scrollbar,setup_expander,bind_expander,bind2,copyContentsFromFile,getVulkanVersion,getDriverVersion,getRamInGb,getLogo,bind1,add_tree_node,add_tree_node2,ExpandDataObject,createMainFile, getGpuImage, setMargin,getDeviceSize,bind3,ExpandDataObject2,bind,bind4, get_gpu_stats
 import Filenames
 import re
+import os
 
 class DataObject(GObject.GObject):
     def __init__(self, column1: str,column2: str):
@@ -86,6 +87,32 @@ def setup(widget, item):
     label.props.xalign = 0.0
     label.set_ellipsize(Pango.EllipsizeMode.END)
     item.set_child(label)
+
+
+def extract_vulkan_device_features(vulkaninfo_file, gpu_name_index):
+    try:
+        with open(vulkaninfo_file, 'r') as f:
+            content = f.read()
+    except Exception:
+        return ""
+    gpu_blocks = re.split(r'\n(?=GPU\d+:)', '\n' + content)
+    target_block = None
+    for block in gpu_blocks[1:]:
+        lines = block.strip().splitlines()
+        if lines and lines[0].startswith(f'GPU{gpu_name_index}:'):
+            target_block = block
+            break
+    if not target_block:
+        return ""
+    feat_pos = target_block.find('VkPhysicalDeviceFeatures:')
+    if feat_pos == -1:
+        return ""
+    features_text = target_block[feat_pos:]
+    for stop_section in ['Format Properties:', 'Presentable Surfaces:', 'Groups:']:
+        stop_pos = features_text.find(stop_section)
+        if stop_pos != -1:
+            features_text = features_text[:stop_pos]
+    return features_text
 
 
 def bind_column1(widget, item):
@@ -434,34 +461,29 @@ def create_vulkan_tab_content(self):
 
         GLib.idle_add(update_ui)
     def Features(GPUname):
+        features_text = extract_vulkan_device_features(Filenames.vulkaninfo_output_file, GPUname)
+        try:
+            with open(Filenames.vulkan_device_features_file, "w") as f:
+                f.write(features_text)
+        except Exception as e:
+            print(f"Error writing features file: {e}")
 
-        fetch_vulkan_device_features_command = "awk '/GPU%d/{flag=1;next}/VkPhysicalDeviceLimits:/{flag=0}flag' | awk '/VkPhysicalDeviceFeatures:/{flag=1;next}/VkPhysicalDeviceLimits:/{flag=0}flag' | awk '/--/{flag=1;next}flag' | awk '/./'" %(GPUname)
+        def update_ui():
+            featureList.remove_all()
+            featureList.append(DataObject("Show All Device Features", ""))
+            if os.path.exists(Filenames.vulkan_device_features_file):
+                with open(Filenames.vulkan_device_features_file, "r") as file1:
+                    for line in file1:
+                        if line.startswith("VkPhysicalDevice") and "Features" in line:
+                            text1 = line.strip("\t").replace("VkPhysicalDevice", "").replace(":", "")
+                            featureList.append(DataObject(text1.strip(), ""))
 
-        createMainFile(Filenames.vulkan_device_features_file,Filenames.fetch_vulkaninfo_ouput_command+fetch_vulkan_device_features_command)
+            selectFeature(featureDropdown, None)
 
-        createMainFile(Filenames.vulkan_device_features_lhs_file,Filenames.fetch_vulkan_device_features_lhs_command)
+            # Hide spinner and show content
+            hide_spinner_for_tab("Features")
 
-        createMainFile(Filenames.vulkan_device_features_select_file,Filenames.fetch_vulkan_device_features_select_command)
-
-        FeaturesLHS = fetchContentsFromCommand("cat %s "%Filenames.vulkan_device_features_lhs_file)
-
-        value = []; count = 0; fgColor = []
-        for i,LHS in enumerate(FeaturesLHS):
-            with open(Filenames.vulkan_device_features_select_file, "r") as file1:
-                text = LHS.strip('\n')
-                for line in file1:
-                    if text in line:
-                        if "= true" in line:
-                            value.append('true')
-                            count = count + 1
-                            fgColor.append(const.COLOR1)
-                            break
-                        else :
-                            value.append('false')
-                            fgColor.append(const.COLOR2)
-                            break
-                val_str = value[i].strip('\n') if i < len(value) else ""
-                FeatureTab_Store.append(DataObject("  " +text.strip('\n'), val_str))
+        GLib.idle_add(update_ui)
 
 
     def Extensions(GPUname):
@@ -1872,51 +1894,63 @@ def create_vulkan_tab_content(self):
             featureDropdown = Gtk.DropDown(model=filterFeaturesStoreDropdown,factory=factory_features_dropdown_value)
             featureDropdown.set_enable_search(True)
             features_dropdown_search = _get_search_entry_widget(featureDropdown)
-            features_dropdown_search.connect('search-changed',_on_search_method_changed,filter_features_dropdown)
-        #   featureDropdown.set_model(featureList)
+            features_dropdown_search.connect('search-changed', _on_search_method_changed, filter_features_dropdown)
+
             def selectFeature(dropdown, _pspec):
                 selected = dropdown.props.selected_item
                 feature = ""
                 if selected is not None:
                     feature = selected.column1
 
-                fetch_device_features_all_command = "cat %s | awk '/==/{flag=1;next} flag' | awk '{sub(/^[ \\t]+/, \"True\"); print }' | grep =" %(Filenames.vulkan_device_features_file)
-                fetch_device_features_selected_command = "cat %s | awk '/%s/{flag=1;next}/^Vk*/{flag=0}flag' | awk '/--/{flag=1 ; next} flag' | grep = | sort " %(Filenames.vulkan_device_features_file,feature)
-                fetch_device_features_selected_lhs_command = "cat %s | awk '{sub(/^[ \\t]+/, \"True\"); print }' | awk '{gsub(/= true/,\"True\");print}' | awk '{gsub(/= false/,\"False\");print}' | awk '{sub(/[ \\t]+$/, \"True\"); print }' | awk '/./' | sort | uniq" %(Filenames.vulkan_device_features_select_file)
+                if not os.path.exists(Filenames.vulkan_device_features_file):
+                    return
 
-                if feature is None:
-                    feature = ' '
-                elif "Show All Device Features" in feature:
-                    createMainFile(Filenames.vulkan_device_features_select_file, fetch_device_features_all_command)
+                try:
+                    with open(Filenames.vulkan_device_features_file, "r") as f:
+                        lines = f.readlines()
+                except Exception as e:
+                    print(f"Error reading features file: {e}")
+                    return
+
+                items = []
+                if not feature or "Show All Device Features" in feature:
                     featureColumn1.set_title("Device Features")
+                    for line in lines:
+                        if "=" in line:
+                            parts = line.split("=", 1)
+                            k = parts[0].strip()
+                            v = parts[1].strip()
+                            if not k or set(k).issubset({'-', '=', ' '}):
+                                continue
+                            items.append((k, v))
+                    items.sort(key=lambda x: x[0].lower())
                 else:
-                    createMainFile(Filenames.vulkan_device_features_select_file, fetch_device_features_selected_command)
                     featureColumn1.set_title(feature)
-                createMainFile(Filenames.vulkan_device_features_lhs_file, fetch_device_features_selected_lhs_command)
+                    target_header = f"VkPhysicalDevice{feature}:"
+                    in_section = False
+                    for line in lines:
+                        sline = line.strip()
+                        if sline.startswith(target_header):
+                            in_section = True
+                            continue
+                        if in_section:
+                            if sline.startswith("VkPhysicalDevice") and ":" in sline:
+                                break
+                            if "=" in line:
+                                parts = line.split("=", 1)
+                                k = parts[0].strip()
+                                v = parts[1].strip()
+                                if not k or set(k).issubset({'-', '=', ' '}):
+                                    continue
+                                items.append((k, v))
+                    items.sort(key=lambda x: x[0].lower())
 
-                value = []
-                fgColor = []
                 FeatureTab_Store.remove_all()
-                FeaturesLHS = copyContentsFromFile(Filenames.vulkan_device_features_lhs_file)
-                count = 0
-                for i, LHS in enumerate(FeaturesLHS):
-                    with open(Filenames.vulkan_device_features_select_file, "r") as file1:
-                        text = LHS.strip('\n')
-                        for line in file1:
-                            if text in line:
-                                if "= true" in line:
-                                    value.append('true')
-                                    count = count + 1
-                                    fgColor.append(const.COLOR1)
-                                    break
-                                else:
-                                    value.append('false')
-                                    fgColor.append(const.COLOR2)
-                                    break
-                        val_str = value[i].strip('\n') if i < len(value) else ""
-                        FeatureTab_Store.append(DataObject("  " + text.strip('\n'), val_str))
+                for k, v in items:
+                    FeatureTab_Store.append(DataObject("  " + k, v))
 
             featureDropdown.connect('notify::selected-item', selectFeature)
+
 
             
             featureFrameSearch = Gtk.Frame()
