@@ -555,7 +555,6 @@ else:
             header_buttons_box.set_halign(Gtk.Align.END)
             header_buttons_box.set_valign(Gtk.Align.CENTER)
             header_buttons_box.append(self.save_button)
-            header_buttons_box.append(self.close_tab_button)
             header_buttons_box.append(self.summary_reorder_button)
             header_buttons_box.append(self.theme_button)
             self.header_bar.pack_end(header_buttons_box)
@@ -743,34 +742,34 @@ else:
 
             _register_summary()
 
-            # Keep supported page builders available, but do not add them to the view stack yet.
+            # Register all supported tabs immediately so they appear in the header bar.
             if results.get("vulkan"):
-                _register_available("page1", "Vulkan", "Vulkan",
-                                    lambda: create_vulkan_tab_content(self))
+                _register("page1", "Vulkan", "Vulkan",
+                          lambda: create_vulkan_tab_content(self))
 
             if results.get("vulkan_video"):
                 def _build_vulkan_video():
                     box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 10)
                     return VulkanVideo(box)
-                _register_available("vulkan_video_page", "Vulkan Video", "Vulkan-Video", _build_vulkan_video)
+                _register("vulkan_video_page", "Vulkan Video", "Vulkan-Video", _build_vulkan_video)
 
             if results.get("opengl"):
                 def _build_opengl():
                     box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 10)
                     return OpenGL(self, box)
-                _register_available("page2", "OpenGL", "OpenGL", _build_opengl)
+                _register("page2", "OpenGL", "OpenGL", _build_opengl)
 
             if results.get("opencl"):
                 def _build_opencl():
                     box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 10)
                     return openCL(self, box)
-                _register_available("opencl_page", "OpenCL", "OpenCL", _build_opencl)
+                _register("opencl_page", "OpenCL", "OpenCL", _build_opencl)
 
             if results.get("vdpau"):
                 def _build_vdpau():
                     box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 10)
                     return vdpauinfo(box)
-                _register_available("vdpau_page", "VDPAU", "vdpauinfo", _build_vdpau)
+                _register("vdpau_page", "VDPAU", "vdpauinfo", _build_vdpau)
 
             # About page has no subprocesses — build immediately
             page3_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 10)
@@ -784,10 +783,6 @@ else:
                 if name and not self._tab_built.get(name, True) and name in self._tab_builders:
                     self._tab_built[name] = True   # prevent double-build
                     _build_tab_async(name)
-
-                # Enable close button only for main tabs (not Summary or About)
-                if hasattr(self, 'close_tab_button') and self.close_tab_button:
-                    self.close_tab_button.set_sensitive(name not in ("summary", "page3"))
 
                 # Enable save button only for API detail tabs (not Summary or About)
                 if hasattr(self, 'save_button') and self.save_button:
@@ -805,34 +800,9 @@ else:
             def open_tab(page_name, gpu_index=None):
                 # Store GPU pre-selection request for Vulkan/OpenCL viewers to read
                 self._pending_gpu_index = gpu_index
-
+                # All tabs are already in the view_stack — just switch to the requested one.
                 if page_name in self._inner_stacks:
                     self.view_stack.set_visible_child_name(page_name)
-                    return
-                if page_name not in self._available_tab_builders:
-                    return
-
-                # Remove About Us temporarily so the new tab inserts before it
-                about_box = getattr(self, '_about_page_box', None)
-                if about_box is not None:
-                    try:
-                        self.view_stack.remove(about_box)
-                    except Exception:
-                        pass
-
-                title, icon, builder = self._available_tab_builders[page_name]
-                _register_tab(page_name, title, icon, builder)
-                self._tab_built[page_name] = False
-                _build_tab_async(page_name)
-
-                # Re-append About Us at the very end
-                if about_box is not None:
-                    try:
-                        self.view_stack.add_titled_with_icon(about_box, "page3", "About Us", "about-us")
-                    except Exception:
-                        pass
-
-                self.view_stack.set_visible_child_name(page_name)
 
             self.open_tab = open_tab
 

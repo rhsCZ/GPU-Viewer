@@ -2014,16 +2014,6 @@ def _make_card(title: str, icon_name: str, rows: list,
         badge = _make_status_badge("Not detected", False)
     header.append(badge)
 
-    # Navigation buttons
-    if nav_page and supported and app:
-        btn = _nav_button("Open →", nav_page, app, gpu_index=gpu_index)
-        header.append(btn)
-
-    if extra_nav_actions and supported and app:
-        for label, page_name in extra_nav_actions:
-            btn = _nav_button(label, page_name, app, gpu_index=gpu_index)
-            header.append(btn)
-
     # Pop-out button to open card in separate window
     popout_btn = Gtk.Button()
     popout_btn.set_icon_name("window-new-symbolic")
