@@ -1170,6 +1170,54 @@ def get_realtime_uptime() -> str:
     return "—"
 
 
+def get_realtime_cpu_temp() -> int | None:
+    """Return CPU temperature in °C from hwmon coretemp/k10temp/zenpower/acpitz."""
+    try:
+        for hw in glob.glob("/sys/class/hwmon/hwmon*"):
+            name = ""
+            name_file = os.path.join(hw, "name")
+            if os.path.exists(name_file):
+                try:
+                    with open(name_file, "r") as fp:
+                        name = fp.read().strip()
+                except Exception:
+                    pass
+            if any(k in name.lower() for k in ["coretemp", "k10temp", "zenpower", "cpu_thermal", "acpitz", "tctl", "tdie"]):
+                for tf in sorted(glob.glob(os.path.join(hw, "temp*_input"))):
+                    try:
+                        with open(tf, "r") as fp:
+                            val = int(fp.read().strip()) // 1000
+                        if 0 < val < 130:
+                            return val
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return None
+
+
+def get_realtime_swap_usage() -> str:
+    """Return Swap usage formatted as 'X.X GB / Y.Y GB (Z %)'."""
+    try:
+        total = 0
+        free = 0
+        with open("/proc/meminfo", "r") as fp:
+            for line in fp:
+                if line.startswith("SwapTotal:"):
+                    total = int(line.split()[1])
+                elif line.startswith("SwapFree:"):
+                    free = int(line.split()[1])
+        if total > 0:
+            used = total - free
+            pct = (used / total) * 100.0
+            used_gb = used / (1024 * 1024)
+            total_gb = total / (1024 * 1024)
+            return f"{used_gb:.1f} GB / {total_gb:.1f} GB ({pct:.0f} %)"
+    except Exception:
+        pass
+    return "—"
+
+
 def _parse_system() -> dict:
     """Return basic system info (OS, CPU, RAM, Kernel, Desktop, plus detailed BIOS, Uptime, etc.)."""
     info = {
@@ -1798,17 +1846,23 @@ def _usage_percent(value):
     return float(match.group(1)) if match else 0.0
 
 
-def _update_gauge_dict(gw: dict, s: dict = None, cpu_usage=None, ram_usage=None):
-    """Update a dictionary of CircularGauge instances from stats, CPU usage, and RAM usage."""
+def _update_gauge_dict(gw: dict, s: dict = None, cpu_usage=None, ram_usage=None, cpu_temp=None, swap_usage=None):
+    """Update a dictionary of CircularGauge instances from stats, CPU usage, RAM usage, CPU temp, and Swap."""
     if not gw:
         return
     if s:
         mem_used = s.get("mem_used")
         mem_total = s.get("mem_total")
+        gtt_used = s.get("gtt_used")
+        gtt_total = s.get("gtt_total")
         vram_clock = s.get("vram_clock")
         vram_clock_max = s.get("vram_clock_max")
         clk_cur = s.get("clock_current")
         clk_max = s.get("clock_max")
+        voltage = s.get("voltage")
+        temp_hotspot = s.get("temp_hotspot")
+        mem_busy = s.get("mem_busy")
+        fan_rpm = s.get("fan_rpm")
 
         if mem_total and mem_total > 0 and "VRAM" in gw:
             vram_pct = (mem_used / mem_total * 100.0) if mem_used else 0
@@ -1822,11 +1876,21 @@ def _update_gauge_dict(gw: dict, s: dict = None, cpu_usage=None, ram_usage=None)
             else:
                 gw["VRAM Clock"].set_value(0, subtitle="N/A")
 
+        if "Mem Bus" in gw and mem_busy is not None and mem_busy >= 0:
+            gw["Mem Bus"].set_value(mem_busy)
+
+        if gtt_total and gtt_total > 0 and "GTT Memory" in gw:
+            gtt_pct = (gtt_used / gtt_total * 100.0) if gtt_used else 0
+            gw["GTT Memory"].set_value(gtt_pct, subtitle=f"{gtt_used}/{gtt_total}MB")
+
         if "GPU Usage" in gw and s.get("usage") is not None and s["usage"] >= 0:
             gw["GPU Usage"].set_value(s["usage"])
 
         if "Temp" in gw and s.get("temp") is not None and s["temp"] > 0:
             gw["Temp"].set_value(s["temp"])
+
+        if "Hotspot" in gw and temp_hotspot is not None and temp_hotspot > 0:
+            gw["Hotspot"].set_value(temp_hotspot)
 
         if "GPU Clock" in gw:
             if clk_cur and clk_cur > 0:
@@ -1836,11 +1900,15 @@ def _update_gauge_dict(gw: dict, s: dict = None, cpu_usage=None, ram_usage=None)
             else:
                 gw["GPU Clock"].set_value(0, subtitle="N/A")
 
+        if "Voltage" in gw and voltage is not None and voltage > 0:
+            gw["Voltage"].set_value(voltage)
+
         if "Power" in gw and s.get("power_usage") is not None and s["power_usage"] > 0:
             gw["Power"].set_value(s["power_usage"])
 
         if "Fan Speed" in gw and s.get("fan_speed") is not None and s["fan_speed"] >= 0:
-            gw["Fan Speed"].set_value(s["fan_speed"])
+            fan_sub = f"{fan_rpm} RPM" if (fan_rpm and fan_rpm > 0) else ""
+            gw["Fan Speed"].set_value(s["fan_speed"], subtitle=fan_sub)
 
     if cpu_usage is not None and "CPU Usage" in gw:
         cpu_pct = _usage_percent(cpu_usage)
@@ -1848,16 +1916,26 @@ def _update_gauge_dict(gw: dict, s: dict = None, cpu_usage=None, ram_usage=None)
         sub = freq_match.group(1).strip() if freq_match else ""
         gw["CPU Usage"].set_value(cpu_pct, subtitle=sub)
 
+    if cpu_temp is not None and "CPU Temp" in gw and cpu_temp > 0:
+        gw["CPU Temp"].set_value(cpu_temp)
+
     if ram_usage is not None and "RAM Usage" in gw:
         ram_pct = _usage_percent(ram_usage)
         cap_match = re.search(r"([0-9\.]+\s*GB\s*/\s*[0-9\.]+\s*GB)", str(ram_usage))
         sub = cap_match.group(1).replace(" ", "") if cap_match else ""
         gw["RAM Usage"].set_value(ram_pct, subtitle=sub)
 
+    if swap_usage is not None and "Swap" in gw:
+        swap_pct = _usage_percent(swap_usage)
+        cap_match = re.search(r"([0-9\.]+\s*GB\s*/\s*[0-9\.]+\s*GB)", str(swap_usage))
+        sub = cap_match.group(1).replace(" ", "") if cap_match else ""
+        gw["Swap"].set_value(swap_pct, subtitle=sub)
+
 
 
 def _make_gauge_dashboard(gpu_stats: dict, gauges_out: dict,
-                          cpu_usage=0.0, ram_usage=0.0) -> Gtk.Widget:
+                          cpu_usage=0.0, ram_usage=0.0,
+                          cpu_temp=None, swap_usage=None) -> Gtk.Widget:
     """
     Build the speedometer / circular-gauge dashboard for a single GPU card.
     Only metrics with valid real-time data are rendered.
@@ -1899,24 +1977,36 @@ def _make_gauge_dashboard(gpu_stats: dict, gauges_out: dict,
     vram_pct  = (mem_used / mem_total * 100.0) if mem_total > 0 else 0
     vram_sub  = f"{mem_used}/{mem_total}MB" if mem_total > 0 else ""
 
+    gtt_used  = gpu_stats.get("gtt_used") or 0
+    gtt_total = gpu_stats.get("gtt_total") or 0
+    gtt_pct   = (gtt_used / gtt_total * 100.0) if gtt_total > 0 else 0
+    gtt_sub   = f"{gtt_used}/{gtt_total}MB" if gtt_total > 0 else ""
+
     vc_cur  = gpu_stats.get("vram_clock") or 0
     vc_max  = gpu_stats.get("vram_clock_max") or 0
     vc_pct  = (vc_cur / vc_max * 100.0) if vc_max > 0 else 0
     vc_sub  = f"{vc_cur}/{vc_max}MHz" if vc_max > 0 else (f"{vc_cur}MHz" if vc_cur > 0 else "")
 
+    mem_busy = gpu_stats.get("mem_busy")
+
     usage = gpu_stats.get("usage")
     usage_val = usage if (usage is not None and usage >= 0) else 0
 
     temp = gpu_stats.get("temp") or 0
+    temp_hotspot = gpu_stats.get("temp_hotspot") or 0
 
     clk_cur = gpu_stats.get("clock_current") or 0
     clk_max = gpu_stats.get("clock_max") or 0
     clk_pct = (clk_cur / clk_max * 100.0) if clk_max > 0 else 0
     clk_sub = f"{clk_cur}/{clk_max}MHz" if clk_max > 0 else (f"{clk_cur}MHz" if clk_cur > 0 else "")
 
+    voltage = gpu_stats.get("voltage") or 0.0
+
     power = gpu_stats.get("power_usage") or 0
     fan   = gpu_stats.get("fan_speed")
+    fan_rpm = gpu_stats.get("fan_rpm") or 0
     fan_val = fan if (fan is not None and fan >= 0) else 0
+    fan_sub = f"{fan_rpm} RPM" if fan_rpm > 0 else ""
 
     # Filter out metrics that are unsupported or N/A
     valid_defs = []
@@ -1924,19 +2014,34 @@ def _make_gauge_dashboard(gpu_stats: dict, gauges_out: dict,
         valid_defs.append(("VRAM", "%", "vram", vram_pct, vram_sub, 100.0))
     if vc_cur > 0 or vc_max > 0:
         valid_defs.append(("VRAM Clock", "%", "vram_clock", vc_pct, vc_sub, 100.0))
+    if mem_busy is not None and mem_busy >= 0:
+        valid_defs.append(("Mem Bus", "%", "mem_busy", float(mem_busy), "", 100.0))
+    if gtt_total > 0:
+        valid_defs.append(("GTT Memory", "%", "gtt", gtt_pct, gtt_sub, 100.0))
     if usage is not None and usage >= 0:
         valid_defs.append(("GPU Usage", "%", "usage", usage_val, "", 100.0))
     if temp is not None and temp > 0:
         valid_defs.append(("Temp", "°C", "temp", float(temp), "", 110.0))
+    if temp_hotspot is not None and temp_hotspot > 0:
+        valid_defs.append(("Hotspot", "°C", "temp_hotspot", float(temp_hotspot), "", 120.0))
     if clk_cur > 0 or clk_max > 0:
         valid_defs.append(("GPU Clock", "%", "clock", clk_pct, clk_sub, 100.0))
+    if voltage is not None and voltage > 0:
+        valid_defs.append(("Voltage", "V", "voltage", float(voltage), "", 2.0))
     if power is not None and power > 0:
         valid_defs.append(("Power", "W", "power", float(power), "", 300.0))
     if fan is not None and fan >= 0:
-        valid_defs.append(("Fan Speed", "%", "fan", float(fan_val), "", 100.0))
+        valid_defs.append(("Fan Speed", "%", "fan", float(fan_val), fan_sub, 100.0))
     # System CPU & RAM Gauges
     valid_defs.append(("CPU Usage", "%", "cpu", _usage_percent(cpu_usage), "", 100.0))
+    if cpu_temp is not None and cpu_temp > 0:
+        valid_defs.append(("CPU Temp", "°C", "cpu_temp", float(cpu_temp), "", 110.0))
     valid_defs.append(("RAM Usage", "%", "ram", _usage_percent(ram_usage), "", 100.0))
+    if swap_usage is not None and swap_usage != "—":
+        swap_pct = _usage_percent(swap_usage)
+        swap_match = re.search(r"([0-9\.]+\s*GB\s*/\s*[0-9\.]+\s*GB)", str(swap_usage))
+        swap_sub = swap_match.group(1).replace(" ", "") if swap_match else ""
+        valid_defs.append(("Swap", "%", "swap", swap_pct, swap_sub, 100.0))
 
 
     for idx, (key, unit, gtype, init_val, sub, max_v) in enumerate(valid_defs):
@@ -2375,6 +2480,10 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
         cpu_usage_init = get_realtime_cpu_usage()
         ram_usage_init = get_realtime_ram_usage()
         uptime_init = get_realtime_uptime()
+        cpu_temp_init = get_realtime_cpu_temp()
+        swap_usage_init = get_realtime_swap_usage()
+
+        cpu_temp_str = f"{cpu_temp_init} °C" if cpu_temp_init is not None else "—"
 
         sys_columns = [
             [
@@ -2388,6 +2497,8 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                 ("Architecture", sys_data.get("architecture", "—")),
                 ("Hostname", sys_data.get("hostname", "—")),
                 ("Uptime", uptime_init),
+                ("CPU Temperature", cpu_temp_str),
+                ("Swap Usage", swap_usage_init),
             ],
             [
                 ("Hardware Model", sys_data.get("hardware_model", "—")),
@@ -2508,7 +2619,7 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                         g_hdr.set_margin_bottom(2)
                         box.append(g_hdr)
                         g_dict = {} if out_gauges is None else out_gauges
-                        box.append(_make_gauge_dashboard(stats, g_dict))
+                        box.append(_make_gauge_dashboard(stats, g_dict, cpu_usage=cpu_usage_init, ram_usage=ram_usage_init, cpu_temp=cpu_temp_init, swap_usage=swap_usage_init))
                         return box
                     return _builder
 
@@ -2822,14 +2933,21 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                     cpu_u = get_realtime_cpu_usage()
                     ram_u = get_realtime_ram_usage()
                     upt_u = get_realtime_uptime()
+                    cpu_t = get_realtime_cpu_temp()
+                    swap_u = get_realtime_swap_usage()
+                    cpu_t_str = f"{cpu_t} °C" if cpu_t is not None else "—"
 
-                    def apply_sys_updates(c=cpu_u, r=ram_u, u=upt_u):
+                    def apply_sys_updates(c=cpu_u, r=ram_u, u=upt_u, ct=cpu_t_str, su=swap_u):
                         if "CPU Usage" in sys_widgets and c != "—":
                             sys_widgets["CPU Usage"].set_subtitle(c)
                         if "RAM Usage" in sys_widgets and r != "—":
                             sys_widgets["RAM Usage"].set_subtitle(r)
                         if "Uptime" in sys_widgets and u != "—":
                             sys_widgets["Uptime"].set_subtitle(u)
+                        if "CPU Temperature" in sys_widgets and ct != "—":
+                            sys_widgets["CPU Temperature"].set_subtitle(ct)
+                        if "Swap Usage" in sys_widgets and su != "—":
+                            sys_widgets["Swap Usage"].set_subtitle(su)
 
                         if "system" in _active_popout_windows:
                             pw = _active_popout_windows["system"].get("widgets", {})
@@ -2839,6 +2957,10 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                                 pw["RAM Usage"].set_subtitle(r)
                             if "Uptime" in pw and u != "—":
                                 pw["Uptime"].set_subtitle(u)
+                            if "CPU Temperature" in pw and ct != "—":
+                                pw["CPU Temperature"].set_subtitle(ct)
+                            if "Swap Usage" in pw and su != "—":
+                                pw["Swap Usage"].set_subtitle(su)
                         return False
 
                     GLib.idle_add(apply_sys_updates)
@@ -2848,9 +2970,9 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                         gauge_widgets = item[2] if len(item) == 3 else item[1]
                         stats = get_gpu_stats_for_index(gpu_index) if gpu_index is not None else {}
                         
-                        def apply_updates(gw=gauge_widgets, s=stats, g_idx=gpu_index, c=cpu_u, r=ram_u):
+                        def apply_updates(gw=gauge_widgets, s=stats, g_idx=gpu_index, c=cpu_u, r=ram_u, ct=cpu_t, su=swap_u):
                             # Update main card gauges
-                            _update_gauge_dict(gw, s, cpu_usage=c, ram_usage=r)
+                            _update_gauge_dict(gw, s, cpu_usage=c, ram_usage=r, cpu_temp=ct, swap_usage=su)
 
                             # Update popped-out standalone window gauges
                             for p_key in ("gpu-stats", f"gpu-{g_idx}" if g_idx is not None else "gpu-0"):
@@ -2859,7 +2981,7 @@ def create_summary_page(app, results: dict) -> Gtk.Widget:
                                     pg_all = popout_info.get("gauges", {})
                                     if isinstance(pg_all, dict):
                                         pg = pg_all.get(g_idx, pg_all) if g_idx in pg_all else pg_all
-                                        _update_gauge_dict(pg, s, cpu_usage=c, ram_usage=r)
+                                        _update_gauge_dict(pg, s, cpu_usage=c, ram_usage=r, cpu_temp=ct, swap_usage=su)
 
                             return False
                         GLib.idle_add(apply_updates)
