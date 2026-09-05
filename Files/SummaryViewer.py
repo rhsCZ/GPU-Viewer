@@ -1455,6 +1455,69 @@ def _gather_all(results: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Metric descriptions / tooltips
+# ---------------------------------------------------------------------------
+
+METRIC_TOOLTIPS = {
+    # Gauges & Real-Time Performance
+    "VRAM": "Video RAM (Dedicated GPU Memory) — Percentage and amount of dedicated on-board graphics memory currently in use.",
+    "VRAM Clock": "VRAM Memory Frequency — Operating clock speed of the dedicated video memory in MHz relative to its maximum frequency.",
+    "Mem Bus": "Memory Controller Activity — Percentage of time the GPU memory interface and controller are actively transferring data.",
+    "GTT Memory": "Graphics Translation Table / Shared Memory — System RAM allocated and used by the GPU as shared memory space.",
+    "GPU Usage": "GPU Core Utilization — Percentage of graphics processing units and compute engines actively executing workloads.",
+    "Temp": "GPU Core Temperature — Thermal reading of the graphics processor core sensor in Celsius (°C).",
+    "Hotspot": "GPU Hotspot / Junction Temperature — Peak temperature measured among all localized sensors across the GPU die in Celsius (°C).",
+    "GPU Clock": "GPU Core Frequency — Current operating frequency of the graphics core in MHz relative to maximum boost clock.",
+    "Voltage": "GPU Core Voltage — Real-time electrical voltage supplied to the graphics processor in Volts (V).",
+    "Power": "GPU Power Consumption — Real-time electrical power draw of the graphics card in Watts (W).",
+    "Fan Speed": "Cooling Fan Speed — Current cooling fan speed as a percentage of maximum PWM duty cycle and revolutions per minute (RPM).",
+    "CPU Usage": "Processor Utilization — Total central processor workload across all cores/threads and current operating frequency.",
+    "CPU Temp": "Processor Temperature — Thermal package/core temperature of the central processor in Celsius (°C).",
+    "RAM Usage": "System Memory — Amount and percentage of physical RAM currently allocated and in use.",
+    "Swap": "Swap Space — Amount and percentage of virtual disk swap space utilized by the system.",
+
+    # System Information
+    "Operating System": "Current Linux operating system distribution and version.",
+    "Processor": "Central Processing Unit (CPU) model and architecture specifications.",
+    "CPU Cores / Threads": "Number of physical CPU cores and logical hardware threads.",
+    "CPU Cache": "Hardware cache hierarchy (L1 Data, L1 Instruction, L2, and L3 caches).",
+    "Kernel": "Linux kernel version currently running.",
+    "Architecture": "CPU instruction set architecture (e.g. x86_64, aarch64).",
+    "Hostname": "System network hostname.",
+    "Uptime": "Total elapsed time since the system was booted.",
+    "CPU Temperature": "Thermal package/core temperature of the central processor in Celsius (°C).",
+    "Swap Usage": "Amount and percentage of virtual disk swap memory currently utilized.",
+    "Hardware Model": "Computer motherboard or chassis hardware model identifier.",
+    "BIOS Info": "System BIOS / UEFI firmware version and release date.",
+    "Desktop / Session": "Current desktop environment and windowing protocol (Wayland / X11).",
+    "Disk Capacity": "Total available storage space across mounted storage partitions.",
+    "Hard Drives": "Detected storage drives and solid-state disks.",
+    "Display": "Connected monitor displays and output screen resolutions.",
+
+    # GPU Card Details
+    "PCI Address": "PCI Express bus, device, and function address identifier of the graphics card.",
+    "PCIe Link Speed": "Current negotiated PCIe link transfer speed (e.g. 8.0 GT/s PCIe Gen 3 / Gen 4).",
+    "PCIe Link Width": "Current negotiated PCIe lane width (e.g. x16, x8, x4).",
+    "Driver": "Active kernel and userspace graphics driver.",
+    "VBIOS Version": "Video BIOS firmware version installed on the graphics card.",
+    "VRAM Type": "Memory technology generation used for video RAM (e.g. GDDR6, GDDR5, HBM2, DDR4).",
+    "Compute Units": "Number of hardware compute units / streaming multiprocessors / execution units.",
+    "ROPs": "Render Output Units (Raster Operations Pipelines) responsible for final pixel processing.",
+
+    # Subsystems
+    "API Version": "Supported application programming interface version specification.",
+    "Driver Version": "Graphics driver release build version.",
+    "Instance Version": "Vulkan loader and instance runtime version.",
+    "Extensions": "Number of supported driver and API extension modules.",
+    "Vulkan Formats": "Number of supported image, texture, and buffer pixel formats.",
+    "Device Type": "Classification of the graphics device (Discrete GPU, Integrated GPU, CPU, etc.).",
+    "GLSL Version": "OpenGL Shading Language version supported by the driver.",
+    "Renderer": "Active graphics rendering device name reported by the driver.",
+    "Vendor": "Hardware manufacturer or graphics driver vendor.",
+}
+
+
+# ---------------------------------------------------------------------------
 # UI helpers
 # ---------------------------------------------------------------------------
 
@@ -1466,7 +1529,11 @@ def _make_action_row(title: str, subtitle: str) -> Gtk.Widget:
     box.set_margin_end(8)
     box.set_margin_top(6)
     box.set_margin_bottom(6)
-    
+
+    tooltip = METRIC_TOOLTIPS.get(title)
+    if tooltip:
+        box.set_tooltip_text(tooltip)
+
     # Title label with wrapping enabled
     title_label = Gtk.Label(label=title)
     title_label.add_css_class("body")
@@ -1956,14 +2023,20 @@ def _make_gauge_dashboard(gpu_stats: dict, gauges_out: dict,
     GAUGE_SIZE = 138
 
     def _gauge_cell(title, unit, gauge_type, value, subtitle="", max_value=100.0):
-        """Build a single gauge + label cell."""
+        """Build a single gauge + label cell with tooltip."""
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         vbox.set_halign(Gtk.Align.CENTER)
         vbox.set_valign(Gtk.Align.CENTER)
 
+        tooltip = METRIC_TOOLTIPS.get(title)
+        if tooltip:
+            vbox.set_tooltip_text(tooltip)
+
         g = CircularGauge(size=GAUGE_SIZE, title=title, unit=unit,
                           min_value=0.0, max_value=max_value,
                           gauge_type=gauge_type)
+        if tooltip:
+            g.set_tooltip_text(tooltip)
         g.set_value(value, subtitle=subtitle)
         g.set_hexpand(True)
         g.set_vexpand(False)
